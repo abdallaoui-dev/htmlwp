@@ -1,0 +1,24 @@
+{
+  "name": "htmlwp",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "types": "./index.d.ts",
+  "keywords": [
+    "html",
+    "webpack",
+    "plugin"
+  ],
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Abdessamad Abdallaoui",
+  "license": "ISC",
+  "dependencies": {
+    "autoprefixer": "^10.4.21",
+    "file-bundler": "^2.2.0",
+    "html-minifier-terser": "^7.2.0",
+    "postcss": "^8.5.3",
+    "sass": "^1.86.3"
+  }
+}

@@ -1,0 +1,10 @@
+cd to package
+npm run start
+
+cd to out-package
+npm install
+npm link
+
+cd to test-package
+npm link htmlwp
+npm run test
