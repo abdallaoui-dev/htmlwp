@@ -1,4 +1,5 @@
 cd to package
+npm install
 npm run start
 
 cd to out-package

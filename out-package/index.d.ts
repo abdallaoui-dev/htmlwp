@@ -1,45 +1,37 @@
 import { Compiler } from "webpack"
 
-type HtmlwpEntryObjectPathOptions = {
+
+type HtmlwpStylesheetEntry = {
    import: string
    filename: string
 }
 
-type HtmlwpEntryObjectJsChunksOptions = {
+type HtmlwpScriptChunkEntry = {
    name: string
-   inject?: "body" | "head",
-   attributes?: {[k: string]: any}
+   inject?: "body" | "head"
+   attributes?: { [k: string]: any }
 }
 
-type HtmlwpEntryObjectCopyMove = {
+type HtmlwpAssetDirEntry = {
    srcPath: string
    destPath: string
 }
 
-type HtmlwpEntryObjectFB = Partial<HtmlwpEntryObjectPathOptions> & {
-   styles?: HtmlwpEntryObjectPathOptions[]
-   jschunks?: HtmlwpEntryObjectJsChunksOptions[]
+type HtmlwpFileBundlerEntry = Partial<HtmlwpStylesheetEntry> & {
+   styles?: HtmlwpStylesheetEntry[]
+   jschunks?: HtmlwpScriptChunkEntry[]
 }
 
 type HtmlwpEntryObject = {
-   [k: string]: HtmlwpEntryObjectFB | HtmlwpEntryObjectCopyMove
+   [k: string]: HtmlwpFileBundlerEntry | HtmlwpAssetDirEntry
 }
 
 type HtmlwpOptions = {
-
    entry: HtmlwpEntryObject
-
    outputPath?: string
-
-   htmlMinifyOptions?: {[k: string]: any}
-
-   // cssMinifyOptions?: {[k: string]: any}
-
+   htmlMinifyOptions?: any
    htmlIncludePrefixName?: string
-
-   htmlIncludeProperties?: {
-      [k: string]: string
-   }
+   htmlIncludeProperties?: { [k: string]: string }
 }
 
 

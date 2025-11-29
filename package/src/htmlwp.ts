@@ -2,26 +2,26 @@ import fs from "fs/promises"
 import path from "path"
 import crypto from "crypto"
 import { Compiler, Stats } from "webpack"
-import FileBundler from "file-bundler"
 import htmlMinifier from "html-minifier-terser"
 import { Options as htmlMinifierOptions } from "html-minifier-terser"
 import sass from "sass"
 import postcss from "postcss"
 import autoprefixer from "autoprefixer"
+import FileBundler from "./file-bundler"
 
 export default class Htmlwp {
    private readonly name = "Htmlwp"
-   private readonly fileDependencies = new Map<string, string[]>()
-   private readonly cssFileNameHashes = new Map<string, string>()
+   private readonly watchedDependencies = new Map<string, string[]>()
+   private readonly cssOutputPaths = new Map<string, string>()
    private readonly options
    private logger!: WebpackLogger
-   private readonly htmlFileBundler
+   private readonly includer
    private stats!: Stats
    private isProductionMode = false
 
    constructor(options: HtmlwpOptions) {
       this.options = options
-      this.htmlFileBundler = new FileBundler({
+      this.includer = new FileBundler({
          className: this.options.htmlIncludePrefixName || this.name,
          pattern: "include",
          includeProperties: this.options.htmlIncludeProperties
@@ -30,69 +30,58 @@ export default class Htmlwp {
 
    public apply = (compiler: Compiler) => {
       this.logger = compiler.getInfrastructureLogger(this.name)
-      
+
       compiler.hooks.done.tapAsync(this.name, async (stats: Stats, callback) => {
          this.stats = stats
          this.isProductionMode = this.stats.compilation.compiler.options.mode === "production"
          await this.handleExternalAssets()
-         stats.compilation.fileDependencies.addAll(Array.from(this.fileDependencies.values()).flat())
+         stats.compilation.fileDependencies.addAll(Array.from(this.watchedDependencies.values()).flat())
          callback()
       })
    }
 
    private handleExternalAssets = async () => {
-
       try {
-
-         const modifiedFile = this.getModifiedFile()
-
+         const modifiedFile = this.getFirstModifiedFile()
          if (modifiedFile) {
-
-            for (const [mainFilePathName, filePathNames] of this.fileDependencies) {
+            for (const [mainFilePathName, filePathNames] of this.watchedDependencies) {
                if (!filePathNames.includes(modifiedFile)) continue
-               await this.hate(mainFilePathName)
+               await this.processEntries(mainFilePathName)
             }
-
             return
          }
 
          for (const key in this.options.entry) {
             const entryObject = this.options.entry[key]
             if ("srcPath" in entryObject && entryObject.destPath) {
-               await this.copyMoveFolderAsync(entryObject.srcPath, entryObject.destPath)
+               await this.copyAssets(entryObject.srcPath, entryObject.destPath)
             }
          }
 
-         await this.hate()
-         
+         await this.processEntries()
       } catch (error) {
          this.logger.error(error)
       }
    }
 
-   private hate = async (mainFilePathName?: string) => {
-
-      let globalEntryObject = this.options.entry["global"] as HtmlwpEntryObjectFB | undefined
-
+   private processEntries = async (mainFilePathName?: string) => {
+      // Global entry is for shared assets only — it must NOT have its own HTML file
+      let globalEntryObject = this.options.entry["global"] as HtmlwpFileBundlerEntry | undefined
       if (globalEntryObject && globalEntryObject.import) globalEntryObject = undefined
 
       let cleanedCssFiles = false
 
-      loop1:for (const key in this.options.entry) {
+      loop1: for (const key in this.options.entry) {
          const entryObject = this.options.entry[key]
          if ("srcPath" in entryObject) continue
-         
+
          if (Array.isArray(entryObject.styles)) {
             for (let i = 0; i < entryObject.styles.length; i++) {
                const stylePathOptions = entryObject.styles[i]
-
                if (!cleanedCssFiles && this.stats.compilation.outputOptions.clean) {
-
                   await this.cleanCssFiles(stylePathOptions.filename)
-
                   cleanedCssFiles = true
                }
-
                if (!mainFilePathName || stylePathOptions.import === mainFilePathName) {
                   await this.bundleCss(stylePathOptions)
                   if (mainFilePathName) break loop1
@@ -101,7 +90,6 @@ export default class Htmlwp {
          }
 
          if (!entryObject.import || !entryObject.filename) continue
-
          if (!mainFilePathName || mainFilePathName === entryObject.import) {
             await this.bundleHtml(entryObject, globalEntryObject)
             if (mainFilePathName) break loop1
@@ -111,165 +99,139 @@ export default class Htmlwp {
 
    private cleanCssFiles = async (filename: string) => {
       try {
-
-         const dirname = path.dirname(this.resolvePath([this.getOutputPath(), filename]))
-
-         await fs.rm(dirname,{recursive: true})
-      } catch (o_o){}
+         const dirname = path.dirname(path.join(this.getOutputPath(), filename))
+         await fs.rm(dirname, { recursive: true })
+      } catch (error: any) {
+         // Only ignore "not found"; rethrow other errors
+         if (error.code !== "ENOENT") throw error
+      }
    }
 
-   private bundleHtml = async (entryObject: HtmlwpEntryObjectFB, globalEntryObject?: HtmlwpEntryObjectFB) => {
-
-      const bundleResults = this.htmlFileBundler.bundle(entryObject.import!) as __bundleResults
+   private bundleHtml = async (entryObject: HtmlwpFileBundlerEntry, globalEntryObject?: HtmlwpFileBundlerEntry) => {
+      const bundleResults = this.includer.bundle(entryObject.import!)
 
       if (this.isProductionMode) await this.minify(bundleResults)
 
       if (globalEntryObject && Array.isArray(globalEntryObject.styles)) {
          this.injectLinkTags(bundleResults, globalEntryObject.styles)
       }
-
       if (Array.isArray(entryObject.styles)) {
          this.injectLinkTags(bundleResults, entryObject.styles)
       }
-
-      if (globalEntryObject && Array.isArray(globalEntryObject?.jschunks)) {
+      if (globalEntryObject && Array.isArray(globalEntryObject.jschunks)) {
          this.injectScriptTags(bundleResults, globalEntryObject.jschunks)
       }
-
       if (Array.isArray(entryObject.jschunks)) {
          this.injectScriptTags(bundleResults, entryObject.jschunks)
       }
 
-      this.fileDependencies.set(entryObject.import!, bundleResults.filePathNames)
-
+      this.watchedDependencies.set(entryObject.import!, bundleResults.filePathNames)
       await this.output(entryObject.filename!, bundleResults)
    }
 
-   private injectLinkTags = (bundleResults: __bundleResults, styles: HtmlwpEntryObjectPathOptions[]) => {
-
-      let tag = ""
-      for (let i = 0; i < styles.length; i++) {
-         const stylePathOptions = styles[i]
-         const filename = ("/" + (this.cssFileNameHashes.get(stylePathOptions.import) || stylePathOptions.filename)).replace(/[\\/]+/g, "/")
-         tag += `<link rel="stylesheet" href="${filename}">`
+   private injectLinkTags = (bundleResults: HtmlwpBundleResult, styles: HtmlwpStylesheetEntry[]) => {
+      let tags = ""
+      for (const style of styles) {
+         const filename = ("/" + (this.cssOutputPaths.get(style.import) || style.filename)).replace(/[\\/]+/g, "/")
+         tags += `<link rel="stylesheet" href="${filename}">`
       }
-      
-      bundleResults.source = bundleResults.source.replace(/<\/head>/, tag + "</head>")
+      bundleResults.source = bundleResults.source.replace(/<\/head>/, tags + "</head>")
    }
 
-   private injectScriptTags = (bundleResults: __bundleResults, jschunks: HtmlwpEntryObjectJsChunksOptions[]) => {
-
+   private injectScriptTags = (bundleResults: HtmlwpBundleResult, jschunks: HtmlwpScriptChunkEntry[]) => {
       const tagMap = new Map<string, string>()
-
-      for (let i = 0; i < jschunks.length; i++) {
-         const jschunk = jschunks[i]
-         
+      for (const jschunk of jschunks) {
          const chunk = this.stats.compilation.namedChunks.get(jschunk.name)
-
          if (!chunk) continue
 
          const filename = ("/" + [...chunk.files][0]).replace(/[\\/]+/g, "/")
-
-         const attributes = Object.entries(jschunk.attributes || {}).map(a => `${a[0]}${typeof a[1] === "string" ? "="+"\""+a[1]+"\"" : ""}`).join(" ")
-
-         tagMap.set(jschunk.inject || "body", `<script ${attributes} src="${filename}"></script>`.replace(/\s+/g, " "))
+         const attributes = Object.entries(jschunk.attributes || {})
+            .map(([k, v]) => typeof v === "string" ? `${k}="${v}"` : k)
+            .join(" ")
+         const tag = `<script ${attributes} src="${filename}"></script>`.replace(/\s+/g, " ")
+         const key = jschunk.inject || "body"
+         tagMap.set(key, (tagMap.get(key) || "") + tag)
       }
 
-      for (const [key, tag] of tagMap) {
+      for (const [key, tags] of tagMap) {
          if (key === "head") {
-            bundleResults.source = bundleResults.source.replace(/<\/head>/, tag + "</head>")
+            bundleResults.source = bundleResults.source.replace(/<\/head>/, tags + "</head>")
          } else {
             const lastIndexOfBody = bundleResults.source.lastIndexOf("</body>")
-
             if (lastIndexOfBody === -1) continue
-            
-            bundleResults.source = bundleResults.source.slice(0, lastIndexOfBody) + tag + bundleResults.source.slice(lastIndexOfBody)
+            bundleResults.source =
+               bundleResults.source.slice(0, lastIndexOfBody) +
+               tags +
+               bundleResults.source.slice(lastIndexOfBody)
          }
       }
-
-      
    }
 
-   private bundleCss = async (stylePathOptions: HtmlwpEntryObjectPathOptions) => {
-
+   private bundleCss = async (stylePathOptions: HtmlwpStylesheetEntry) => {
       const sassResult = sass.compile(stylePathOptions.import, {
          style: this.isProductionMode ? "compressed" : undefined,
          alertColor: false
       })
 
-      const bundleResults = { source: sassResult.css, filePathNames: [] } as __bundleResults
-      
-      bundleResults.filePathNames = sassResult.loadedUrls.map(url => this.resolvePath([url.pathname]))
+      const bundleResults: HtmlwpBundleResult = {
+         source: sassResult.css,
+         filePathNames: sassResult.loadedUrls.map(url => url.pathname)
+      }
 
       if (this.isProductionMode) {
-         bundleResults.source = postcss([autoprefixer]).process(bundleResults.source, {
-            from: undefined
-         }).css
+         bundleResults.source = postcss([autoprefixer]).process(bundleResults.source, { from: undefined }).css
       }
-      
+
       let filename = stylePathOptions.filename
-
-      if (stylePathOptions.filename.includes("[contenthash]")) {
-         filename = stylePathOptions.filename.replace(
-            "[contenthash]",
-            crypto.createHash("md5").update(bundleResults.source).digest("hex").slice(0, 24)
-         )
-         this.cssFileNameHashes.set(stylePathOptions.import, filename)
+      if (filename.includes("[contenthash]")) {
+         const hash = crypto.createHash("md5").update(bundleResults.source).digest("hex").slice(0, 24)
+         filename = filename.replace("[contenthash]", hash)
+         this.cssOutputPaths.set(stylePathOptions.import, filename)
       }
 
-      this.fileDependencies.set(stylePathOptions.import, bundleResults.filePathNames)
-      
+      this.watchedDependencies.set(stylePathOptions.import, bundleResults.filePathNames)
       await this.output(filename, bundleResults)
    }
 
+   // Use standard Node.js path resolution — no custom normalization needed
    private resolvePath = (paths: string[]) => {
-      paths.forEach((p, i) => paths[i] = p.split(/[\\|\/]+/).filter(v => v).join("/"))
       return path.resolve(...paths)
    }
 
-   private copyMoveFolderAsync = async (srcPath: string, destPath: string) => {
+   private copyAssets = async (srcPath: string, destPath: string) => {
       try {
-         const outputPath = this.options.outputPath || this.stats.compilation.outputOptions.path || "dist"
-                  
-         await this.makeDirIfNotExists(this.resolvePath([outputPath, destPath]))
+         const outputPath = this.getOutputPath()
+         const dest = path.join(outputPath, destPath)
+         await this.ensureDirExists(dest)
 
          const files = await fs.readdir(srcPath)
+         await Promise.all(files.map(async (file) => {
+            const srcFile = path.join(srcPath, file)
+            const destFile = path.join(dest, file)
+            const stat = await fs.stat(srcFile)
 
-         await Promise.all(
-            files.map(async (file) => {
-               const srcFile = this.resolvePath([srcPath, file])
-               const destFile = this.resolvePath([outputPath, destPath, file])
-
-               const filePathNameStats = await fs.stat(srcFile)
-
-               if (filePathNameStats.isDirectory()) {
-                  await this.copyMoveFolderAsync(srcFile, destFile)
+            if (stat.isDirectory()) {
+               await this.copyAssets(srcFile, destFile)
+            } else {
+               if (file.endsWith(".json") && this.isProductionMode) {
+                  const data = JSON.parse(await fs.readFile(srcFile, "utf8"))
+                  await fs.writeFile(destFile, JSON.stringify(data), "utf8")
                } else {
-                  if (file.endsWith(".json") && this.isProductionMode) {
-                     const jsonData = await fs.readFile(srcFile, "utf8")
-                     const compressedJsonData = JSON.stringify(JSON.parse(jsonData))
-                     await fs.writeFile(destFile, compressedJsonData, "utf8")
-                  } else {
-                     await fs.copyFile(srcFile, destFile)
-                  }
+                  await fs.copyFile(srcFile, destFile)
                }
-
-            })
-         )
-
+            }
+         }))
       } catch (error) {
          this.logger.error(error)
       }
    }
 
-   private getModifiedFile = () => {
+   private getFirstModifiedFile = () => {
       const modifiedFiles = this.stats.compilation.compiler.modifiedFiles
-      if (!modifiedFiles) return null
-      return [...modifiedFiles][0] || null
+      return modifiedFiles ? [...modifiedFiles][0] || null : null
    }
 
-   private minify = async (bundleResults: __bundleResults) => {
-
+   private minify = async (bundleResults: HtmlwpBundleResult) => {
       const options = this.options.htmlMinifyOptions || {
          removeComments: true,
          removeScriptTypeAttributes: true,
@@ -281,29 +243,18 @@ export default class Htmlwp {
          minifyCSS: true,
          minifyJS: true
       }
-      
       bundleResults.source = await htmlMinifier.minify(bundleResults.source, options)
    }
 
-   private output = async (filePathName: string, bundleResults: __bundleResults) => {
-
+   private output = async (filePathName: string, bundleResults: HtmlwpBundleResult) => {
       try {
          const outputPath = this.getOutputPath()
-
-         filePathName = this.resolvePath([outputPath, filePathName])
-
-         let directory = filePathName
-         if (path.basename(filePathName)) {   
-            directory = path.dirname(filePathName)
-         }
-      
-         await this.makeDirIfNotExists(directory)
-
-         await fs.writeFile(filePathName, bundleResults.source)
-
+         const fullOutputPath = path.join(outputPath, filePathName)
+         const dir = path.dirname(fullOutputPath)
+         await this.ensureDirExists(dir)
+         await fs.writeFile(fullOutputPath, bundleResults.source)
       } catch (e) {
-         const error = e as Error
-         this.logger.error(error)
+         this.logger.error(e as Error)
       }
    }
 
@@ -313,92 +264,62 @@ export default class Htmlwp {
       try {
          await fs.access(filePathName)
          return true
-      } catch (error) {
-         const e = error as any
-         if (e.code === "ENOENT") {
-            return false
-         }
-         throw error
+      } catch (error: any) {
+         return error.code === "ENOENT"
       }
    }
 
-   private makeDirIfNotExists = async (directory: string) => {
-
-      const fileExists = await this.fileExists(directory)
-
-      if (fileExists) return
-      
-      await fs.mkdir(directory, { recursive: true })
+   private ensureDirExists = async (directory: string) => {
+      if (!await this.fileExists(directory)) {
+         await fs.mkdir(directory, { recursive: true })
+      }
    }
-
 }
 
-type HtmlwpEntryObjectPathOptions = {
+// ─── Types ───────────────────────────────────────────────────────
+
+type HtmlwpStylesheetEntry = {
    import: string
    filename: string
 }
 
-type HtmlwpEntryObjectJsChunksOptions = {
+type HtmlwpScriptChunkEntry = {
    name: string
-   inject?: "body" | "head",
-   attributes?: {[k: string]: any}
+   inject?: "body" | "head"
+   attributes?: { [k: string]: any }
 }
 
-type HtmlwpEntryObjectCopyMove = {
+type HtmlwpAssetDirEntry = {
    srcPath: string
    destPath: string
 }
 
-type HtmlwpEntryObjectFB = Partial<HtmlwpEntryObjectPathOptions> & {
-   styles?: HtmlwpEntryObjectPathOptions[]
-   jschunks?: HtmlwpEntryObjectJsChunksOptions[]
+type HtmlwpFileBundlerEntry = Partial<HtmlwpStylesheetEntry> & {
+   styles?: HtmlwpStylesheetEntry[]
+   jschunks?: HtmlwpScriptChunkEntry[]
 }
 
 type HtmlwpEntryObject = {
-   [k: string]: HtmlwpEntryObjectFB | HtmlwpEntryObjectCopyMove
+   [k: string]: HtmlwpFileBundlerEntry | HtmlwpAssetDirEntry
 }
 
 type HtmlwpOptions = {
-
    entry: HtmlwpEntryObject
-
    outputPath?: string
-
    htmlMinifyOptions?: htmlMinifierOptions
-
-   // cssMinifyOptions?: {[k: string]: any}
-
    htmlIncludePrefixName?: string
-
-   htmlIncludeProperties?: {
-      [k: string]: string
-   }
+   htmlIncludeProperties?: { [k: string]: string }
 }
 
-type __bundleResults = {
+type HtmlwpBundleResult = {
    source: string
    filePathNames: string[]
 }
 
 interface WebpackLogger {
-	getChildLogger: (arg0: string | (() => string)) => WebpackLogger;
-	error(...args: any[]): void;
-	warn(...args: any[]): void;
-	info(...args: any[]): void;
-	log(...args: any[]): void;
-	debug(...args: any[]): void;
-	assert(assertion: any, ...args: any[]): void;
-	trace(): void;
-	clear(): void;
-	status(...args: any[]): void;
-	group(...args: any[]): void;
-	groupCollapsed(...args: any[]): void;
-	groupEnd(...args: any[]): void;
-	profile(label?: any): void;
-	profileEnd(label?: any): void;
-	time(label?: any): void;
-	timeLog(label?: any): void;
-	timeEnd(label?: any): void;
-	timeAggregate(label?: any): void;
-	timeAggregateEnd(label?: any): void;
+   error(...args: any[]): void
+   warn(...args: any[]): void
+   info(...args: any[]): void
+   log(...args: any[]): void
+   debug(...args: any[]): void
 }
