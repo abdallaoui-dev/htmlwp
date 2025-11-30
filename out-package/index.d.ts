@@ -40,4 +40,5 @@ declare class Htmlwp {
    constructor(options: HtmlwpOptions);
    apply(compiler: Compiler): void
 }
+
 export = Htmlwp

@@ -1,1 +1,0 @@
-var lib;console.log("lib"),lib={};

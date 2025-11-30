@@ -1,6 +1,7 @@
-import fs from "fs/promises"
-import path from "path"
-import crypto from "crypto"
+import fs from "node:fs/promises"
+import path from "node:path"
+import url from "node:url"
+import crypto from "node:crypto"
 import { Compiler, Stats } from "webpack"
 import htmlMinifier from "html-minifier-terser"
 import { Options as htmlMinifierOptions } from "html-minifier-terser"
@@ -10,7 +11,8 @@ import autoprefixer from "autoprefixer"
 import FileBundler from "./file-bundler"
 
 export default class Htmlwp {
-   private readonly name = "Htmlwp"
+   private className = "Htmlwp"
+   private readonly name = this.className
    private readonly watchedDependencies = new Map<string, string[]>()
    private readonly cssOutputPaths = new Map<string, string>()
    private readonly options
@@ -101,10 +103,7 @@ export default class Htmlwp {
       try {
          const dirname = path.dirname(path.join(this.getOutputPath(), filename))
          await fs.rm(dirname, { recursive: true })
-      } catch (error: any) {
-         // Only ignore "not found"; rethrow other errors
-         if (error.code !== "ENOENT") throw error
-      }
+      } catch (O_o) {}
    }
 
    private bundleHtml = async (entryObject: HtmlwpFileBundlerEntry, globalEntryObject?: HtmlwpFileBundlerEntry) => {
@@ -168,34 +167,35 @@ export default class Htmlwp {
    }
 
    private bundleCss = async (stylePathOptions: HtmlwpStylesheetEntry) => {
-      const sassResult = sass.compile(stylePathOptions.import, {
-         style: this.isProductionMode ? "compressed" : undefined,
-         alertColor: false
-      })
+      try {
+         const sassResult = sass.compile(stylePathOptions.import, {
+            style: this.isProductionMode ? "compressed" : undefined,
+            alertColor: false
+         })
+         
+         const bundleResults: HtmlwpBundleResult = {
+            source: sassResult.css,
+            filePathNames: sassResult.loadedUrls.map(u => url.fileURLToPath(u.href))
+         }
 
-      const bundleResults: HtmlwpBundleResult = {
-         source: sassResult.css,
-         filePathNames: sassResult.loadedUrls.map(url => url.pathname)
+         if (this.isProductionMode) {
+            bundleResults.source = postcss([autoprefixer]).process(bundleResults.source, { from: undefined }).css
+         }
+   
+         let filename = stylePathOptions.filename
+         if (filename.includes("[contenthash]")) {
+            const hash = crypto.createHash("md5").update(bundleResults.source).digest("hex").slice(0, 24)
+            filename = filename.replace("[contenthash]", hash)
+            this.cssOutputPaths.set(stylePathOptions.import, filename)
+         }
+   
+         this.watchedDependencies.set(stylePathOptions.import, bundleResults.filePathNames)
+
+         await this.output(filename, bundleResults)
+         
+      } catch (error) {
+         this.logger.error(`${this.className}.bundleCss: `, error)
       }
-
-      if (this.isProductionMode) {
-         bundleResults.source = postcss([autoprefixer]).process(bundleResults.source, { from: undefined }).css
-      }
-
-      let filename = stylePathOptions.filename
-      if (filename.includes("[contenthash]")) {
-         const hash = crypto.createHash("md5").update(bundleResults.source).digest("hex").slice(0, 24)
-         filename = filename.replace("[contenthash]", hash)
-         this.cssOutputPaths.set(stylePathOptions.import, filename)
-      }
-
-      this.watchedDependencies.set(stylePathOptions.import, bundleResults.filePathNames)
-      await this.output(filename, bundleResults)
-   }
-
-   // Use standard Node.js path resolution — no custom normalization needed
-   private resolvePath = (paths: string[]) => {
-      return path.resolve(...paths)
    }
 
    private copyAssets = async (srcPath: string, destPath: string) => {
@@ -247,6 +247,7 @@ export default class Htmlwp {
    }
 
    private output = async (filePathName: string, bundleResults: HtmlwpBundleResult) => {
+      console.log({filePathName})
       try {
          const outputPath = this.getOutputPath()
          const fullOutputPath = path.join(outputPath, filePathName)
@@ -265,12 +266,14 @@ export default class Htmlwp {
          await fs.access(filePathName)
          return true
       } catch (error: any) {
-         return error.code === "ENOENT"
+         if (error.code === "ENOENT") return false
+         throw error
       }
    }
 
    private ensureDirExists = async (directory: string) => {
-      if (!await this.fileExists(directory)) {
+      const fileExists = await this.fileExists(directory)
+      if (!fileExists) {
          await fs.mkdir(directory, { recursive: true })
       }
    }
