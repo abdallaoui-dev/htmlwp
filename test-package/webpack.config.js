@@ -76,12 +76,10 @@ const wconfig = {
          // htmlIncludePrefixName: "myapp", // myapp.include("/file.html")
 
          htmlIncludeProperties: {
-            title: "my website title",
-            url: "https://freepalestine.com",
+            title: "Free Palestine",
+            url: "https://webpack.js.org",
             domainName: "domain name",
-            meta: "<meta>",
-            headScript: "<script></script>",
-            bodyScript: "<script></script>"
+            meta: "<meta>"
          }
       })
    ],

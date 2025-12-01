@@ -247,7 +247,6 @@ export default class Htmlwp {
    }
 
    private output = async (filePathName: string, bundleResults: HtmlwpBundleResult) => {
-      console.log({filePathName})
       try {
          const outputPath = this.getOutputPath()
          const fullOutputPath = path.join(outputPath, filePathName)

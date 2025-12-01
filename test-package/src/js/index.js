@@ -1,1 +1,1 @@
-console.log("something..")
+console.log("Free Palestine")
