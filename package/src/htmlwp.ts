@@ -303,8 +303,9 @@ export default class Htmlwp {
          .map(filename => {
             let urlPath = filename
                .replace(/\\/g, "/")
-               .replace(/^index\.html$/, "")           // /index.html -> /
-               .replace(/\/index\.html$/, "/")          // /about/index.html -> /about/
+               .replace(/\.html$/g, "")
+               .replace(/^index$/, "")           // /index -> /
+               .replace(/\/index$/, "/")          // /about/index -> /about/
 
             return `${originUrl}/${urlPath.replace(/^\//, "")}`
          })

@@ -1,6 +1,6 @@
 {
   "name": "htmlwp",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Webpack plugin for bundling HTML files with includes, CSS processing, asset copying, and more",
   "main": "index.js",
   "types": "./index.d.ts",
