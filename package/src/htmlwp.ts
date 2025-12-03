@@ -73,6 +73,8 @@ export default class Htmlwp {
 
       let cleanedCssFiles = false
 
+      const htmlFilenames: string[] = []
+
       loop1: for (const key in this.options.entry) {
          const entryObject = this.options.entry[key]
          if ("srcPath" in entryObject) continue
@@ -94,8 +96,13 @@ export default class Htmlwp {
          if (!entryObject.import || !entryObject.filename) continue
          if (!mainFilePathName || mainFilePathName === entryObject.import) {
             await this.bundleHtml(entryObject, globalEntryObject)
+            htmlFilenames.push(entryObject.filename)
             if (mainFilePathName) break loop1
          }
+      }
+
+      if (!mainFilePathName && this.isProductionMode && this.options.xmlsitemap) {
+         await this.generateXmlSitemap(htmlFilenames)
       }
    }
 
@@ -103,7 +110,7 @@ export default class Htmlwp {
       try {
          const dirname = path.dirname(path.join(this.getOutputPath(), filename))
          await fs.rm(dirname, { recursive: true })
-      } catch (O_o) {}
+      } catch (O_o) { }
    }
 
    private bundleHtml = async (entryObject: HtmlwpFileBundlerEntry, globalEntryObject?: HtmlwpFileBundlerEntry) => {
@@ -172,7 +179,7 @@ export default class Htmlwp {
             style: this.isProductionMode ? "compressed" : undefined,
             alertColor: false
          })
-         
+
          const bundleResults: HtmlwpBundleResult = {
             source: sassResult.css,
             filePathNames: sassResult.loadedUrls.map(u => url.fileURLToPath(u.href))
@@ -181,18 +188,18 @@ export default class Htmlwp {
          if (this.isProductionMode) {
             bundleResults.source = postcss([autoprefixer]).process(bundleResults.source, { from: undefined }).css
          }
-   
+
          let filename = stylePathOptions.filename
          if (filename.includes("[contenthash]")) {
             const hash = crypto.createHash("md5").update(bundleResults.source).digest("hex").slice(0, 24)
             filename = filename.replace("[contenthash]", hash)
             this.cssOutputPaths.set(stylePathOptions.import, filename)
          }
-   
+
          this.watchedDependencies.set(stylePathOptions.import, bundleResults.filePathNames)
 
          await this.output(filename, bundleResults)
-         
+
       } catch (error) {
          this.logger.error(`${this.className}.bundleCss: `, error)
       }
@@ -276,9 +283,71 @@ export default class Htmlwp {
          await fs.mkdir(directory, { recursive: true })
       }
    }
+
+   private generateXmlSitemap = async (htmlFilenames: string[]) => {
+      const sitemapOptions = this.options.xmlsitemap
+      if (!sitemapOptions) return
+
+      let { originUrl, lastmod, exclude = [], include } = sitemapOptions
+
+      if (!originUrl.startsWith("http")) {
+         this.logger.warn("sitemap original should start with http/https")
+      }
+
+      originUrl = originUrl.replace(/\/$/, "")
+
+      lastmod = lastmod === "current" ? new Date().toISOString().split('T')[0] : lastmod
+
+      let urls = htmlFilenames
+         .filter(filename => filename.endsWith(".html"))
+         .map(filename => {
+            let urlPath = filename
+               .replace(/\\/g, "/")
+               .replace(/^index\.html$/, "")           // /index.html -> /
+               .replace(/\/index\.html$/, "/")          // /about/index.html -> /about/
+
+            return `${originUrl}/${urlPath.replace(/^\//, "")}`
+         })
+
+      if (include) {
+         urls = include.map(p => originUrl + "/" + p.replace(/^\//, ""))
+      } else if (exclude.length > 0) {
+         const excludeRegexes = exclude.map(p => new RegExp(p))
+         urls = urls.filter(url => !excludeRegexes.some(regex => regex.test(url)))
+      }
+
+      const urlEntries = urls.map(url => {
+         const lastmodEntry = lastmod ? `<lastmod>${lastmod}</lastmod>` : ""
+         return `<url><loc>${this.escapeXml(url)}</loc>${lastmodEntry}</url>`
+      }).join("")
+
+      if (urlEntries.length === 0) return
+
+      const sitemap = `<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urlEntries}</urlset>`
+      
+      await this.output("sitemap.xml", { source: sitemap, filePathNames: [] })
+
+      // this.logger.info(`Generated sitemap.xml with ${urls.length} URLs`)
+   }
+
+   private escapeXml = (str: string) => str.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c] || c))
 }
 
 // ─── Types ───────────────────────────────────────────────────────
+
+type HtmlwpXmlSitemapEntry = {
+   /** Base URL (https://example.com) */
+   originUrl: string
+
+   /** "current" or custom date string */
+   lastmod?: "current" | string
+
+   /** Pages to exclude (/privacy-policy) */
+   exclude?: string[]
+
+   /** Manual paths (/palestinian-food-recipes) - (if set, exclude is ignored) */
+   include?: string[]
+}
 
 type HtmlwpStylesheetEntry = {
    import: string
@@ -311,6 +380,7 @@ type HtmlwpOptions = {
    htmlMinifyOptions?: htmlMinifierOptions
    htmlIncludePrefixName?: string
    htmlIncludeProperties?: { [k: string]: string }
+   xmlsitemap?: HtmlwpXmlSitemapEntry
 }
 
 type HtmlwpBundleResult = {
