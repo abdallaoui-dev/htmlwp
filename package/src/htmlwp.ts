@@ -11,7 +11,7 @@ import autoprefixer from "autoprefixer"
 import FileBundler from "./file-bundler"
 
 export default class Htmlwp {
-   private className = "Htmlwp"
+   private readonly className = "Htmlwp"
    private readonly name = this.className
    private readonly watchedDependencies = new Map<string, string[]>()
    private readonly cssOutputPaths = new Map<string, string>()
@@ -116,7 +116,6 @@ export default class Htmlwp {
    private bundleHtml = async (entryObject: HtmlwpFileBundlerEntry, globalEntryObject?: HtmlwpFileBundlerEntry) => {
       const bundleResults = this.includer.bundle(entryObject.import!)
 
-      if (this.isProductionMode) await this.minify(bundleResults)
 
       if (globalEntryObject && Array.isArray(globalEntryObject.styles)) {
          this.injectLinkTags(bundleResults, globalEntryObject.styles)
@@ -132,10 +131,52 @@ export default class Htmlwp {
       }
 
       this.watchedDependencies.set(entryObject.import!, bundleResults.filePathNames)
+
+      if (this.isProductionMode) {
+         this.injectCanonicalMetaTag(bundleResults, entryObject)
+         await this.minify(bundleResults)
+      } 
+
       await this.output(entryObject.filename!, bundleResults)
    }
 
-   private injectLinkTags = (bundleResults: HtmlwpBundleResult, styles: HtmlwpStylesheetEntry[]) => {
+   private injectCanonicalMetaTag = (bundleResults: HtmlwpBundleResult, entryObject: HtmlwpFileBundlerEntry) => {
+      const canonicalConfig = entryObject.injectCanonicalMetaTag
+      if (!canonicalConfig) return
+
+      const urlOrigin = canonicalConfig.urlOrigin
+      if (!urlOrigin) {
+         this.logger.warn("Canonical meta tag requires URL origin!")
+         return
+      }
+
+      let canonicalPath = this.formatPathForUrl(entryObject.filename || "/")
+
+      if (canonicalConfig.forceTrailingSlash) {
+         canonicalPath = canonicalPath.endsWith("/") ? canonicalPath : canonicalPath + "/"
+      } else {
+         canonicalPath = canonicalPath.endsWith("/") && canonicalPath !== "/" ? canonicalPath.slice(0, -1) : canonicalPath
+      }
+
+      const canonicalUrl = `${urlOrigin}/${canonicalPath.replace(/^\\|^\//, "")}`
+
+      const canonicalTag = `<link rel="canonical" href="${canonicalUrl}">`
+      
+      bundleResults.source = bundleResults.source.replace(
+         /<head[^>]*>/i,
+         match => `${match}\n${canonicalTag}`
+      )
+   }
+
+   private formatPathForUrl = (filePath: string) => {
+
+      return filePath.split(path.sep).join("/")
+      .replace(/\.html$/, "")
+      .replace(/\/index$/, "")   // /index -> /
+      .replace(/^index$/, "")                               // /about/index -> /about/
+   }
+
+   private injectLinkTags = (bundleResults: HtmlwpBundleResult, styles: HtmlwpIOEntry[]) => {
       let tags = ""
       for (const style of styles) {
          const filename = ("/" + (this.cssOutputPaths.get(style.import) || style.filename)).replace(/[\\/]+/g, "/")
@@ -173,7 +214,7 @@ export default class Htmlwp {
       }
    }
 
-   private bundleCss = async (stylePathOptions: HtmlwpStylesheetEntry) => {
+   private bundleCss = async (stylePathOptions: HtmlwpIOEntry) => {
       try {
          const sassResult = sass.compile(stylePathOptions.import, {
             style: this.isProductionMode ? "compressed" : undefined,
@@ -288,30 +329,26 @@ export default class Htmlwp {
       const sitemapOptions = this.options.xmlsitemap
       if (!sitemapOptions) return
 
-      let { originUrl, lastmod, exclude = [], include } = sitemapOptions
+      let { urlOrigin, lastmod, exclude = [], include } = sitemapOptions
 
-      if (!originUrl.startsWith("http")) {
+      if (!urlOrigin.startsWith("http")) {
          this.logger.warn("sitemap original should start with http/https")
       }
 
-      originUrl = originUrl.replace(/\/$/, "")
+      urlOrigin = urlOrigin.replace(/\/$/, "")
 
       lastmod = lastmod === "current" ? new Date().toISOString().split('T')[0] : lastmod
 
       let urls = htmlFilenames
          .filter(filename => filename.endsWith(".html"))
          .map(filename => {
-            let urlPath = filename
-               .replace(/\\/g, "/")
-               .replace(/\.html$/g, "")
-               .replace(/^index$/, "")           // /index -> /
-               .replace(/\/index$/, "/")          // /about/index -> /about/
+            const urlPath = this.formatPathForUrl(filename)
 
-            return `${originUrl}/${urlPath.replace(/^\//, "")}`
+            return `${urlOrigin}/${urlPath.replace(/^\//, "")}`
          })
 
       if (include) {
-         urls = include.map(p => originUrl + "/" + p.replace(/^\//, ""))
+         urls = include.map(p => urlOrigin + "/" + p.replace(/^\//, ""))
       } else if (exclude.length > 0) {
          const excludeRegexes = exclude.map(p => new RegExp(p))
          urls = urls.filter(url => !excludeRegexes.some(regex => regex.test(url)))
@@ -338,7 +375,7 @@ export default class Htmlwp {
 
 type HtmlwpXmlSitemapEntry = {
    /** Base URL (https://example.com) */
-   originUrl: string
+   urlOrigin: string
 
    /** "current" or custom date string */
    lastmod?: "current" | string
@@ -350,7 +387,12 @@ type HtmlwpXmlSitemapEntry = {
    include?: string[]
 }
 
-type HtmlwpStylesheetEntry = {
+type HtmlwpCanonicalMetaTagEntry = {
+   urlOrigin: string
+   forceTrailingSlash?: boolean
+}
+
+type HtmlwpIOEntry = {
    import: string
    filename: string
 }
@@ -366,9 +408,10 @@ type HtmlwpAssetDirEntry = {
    destPath: string
 }
 
-type HtmlwpFileBundlerEntry = Partial<HtmlwpStylesheetEntry> & {
-   styles?: HtmlwpStylesheetEntry[]
+type HtmlwpFileBundlerEntry = Partial<HtmlwpIOEntry> & {
+   styles?: HtmlwpIOEntry[]
    jschunks?: HtmlwpScriptChunkEntry[]
+   injectCanonicalMetaTag?: HtmlwpCanonicalMetaTagEntry
 }
 
 type HtmlwpEntryObject = {

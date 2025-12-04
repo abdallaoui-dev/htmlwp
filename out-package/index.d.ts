@@ -1,8 +1,10 @@
 import { Compiler } from "webpack"
 
+
+
 type HtmlwpXmlSitemapEntry = {
    /** Base URL (https://example.com) */
-   originUrl: string
+   urlOrigin: string
 
    /** "current" or custom date string */
    lastmod?: "current" | string
@@ -14,7 +16,12 @@ type HtmlwpXmlSitemapEntry = {
    include?: string[]
 }
 
-type HtmlwpStylesheetEntry = {
+type HtmlwpCanonicalMetaTagEntry = {
+   urlOrigin: string
+   forceTrailingSlash?: boolean
+}
+
+type HtmlwpIOEntry = {
    import: string
    filename: string
 }
@@ -30,9 +37,10 @@ type HtmlwpAssetDirEntry = {
    destPath: string
 }
 
-type HtmlwpFileBundlerEntry = Partial<HtmlwpStylesheetEntry> & {
-   styles?: HtmlwpStylesheetEntry[]
+type HtmlwpFileBundlerEntry = Partial<HtmlwpIOEntry> & {
+   styles?: HtmlwpIOEntry[]
    jschunks?: HtmlwpScriptChunkEntry[]
+   injectCanonicalMetaTag?: HtmlwpCanonicalMetaTagEntry
 }
 
 type HtmlwpEntryObject = {
@@ -42,11 +50,12 @@ type HtmlwpEntryObject = {
 type HtmlwpOptions = {
    entry: HtmlwpEntryObject
    outputPath?: string
-   htmlMinifyOptions?: object
+   htmlMinifyOptions?: htmlMinifierOptions
    htmlIncludePrefixName?: string
    htmlIncludeProperties?: { [k: string]: string }
    xmlsitemap?: HtmlwpXmlSitemapEntry
 }
+
 
 declare class Htmlwp {
    private options;
